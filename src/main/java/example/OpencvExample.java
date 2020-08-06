@@ -32,7 +32,7 @@ public class OpencvExample {
     public static final String REST_URI = "https://569cdd509a4c4e31bf80651af98c4b45.apigw.ntruss.com/custom/v1/2871/015a8ef25eb2f464f0bc251746946304749b818b0dda137b9041e56e4a965dbd/general";
 
     public static void main(String[] args) throws IOException {
-        // load opencv library
+        // load the native opencv library
         OpenCV.loadShared();
         System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
 
