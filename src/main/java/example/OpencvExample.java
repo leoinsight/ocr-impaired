@@ -1,13 +1,12 @@
 package example;
 
-import ch.qos.logback.core.net.SyslogOutputStream;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import nu.pattern.OpenCV;
-import org.apache.commons.io.FileUtils;
-import org.opencv.core.*;
-import org.opencv.imgcodecs.Imgcodecs;
-import org.opencv.imgproc.Imgproc;
+import static org.opencv.core.CvType.CV_32FC2;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
 
 import javax.ws.rs.client.Client;
 import javax.ws.rs.client.ClientBuilder;
@@ -15,31 +14,54 @@ import javax.ws.rs.client.Entity;
 import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
-import java.io.File;
-import java.io.IOException;
-import java.net.URL;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.List;
 
-import static org.opencv.core.CvType.CV_32FC2;
+import org.apache.commons.io.FileUtils;
+import org.opencv.core.Core;
+import org.opencv.core.Mat;
+import org.opencv.core.MatOfInt;
+import org.opencv.core.MatOfPoint;
+import org.opencv.core.MatOfPoint2f;
+import org.opencv.core.Point;
+import org.opencv.core.Rect;
+import org.opencv.core.Scalar;
+import org.opencv.core.Size;
+import org.opencv.imgcodecs.Imgcodecs;
+import org.opencv.imgproc.Imgproc;
+import org.opencv.videoio.VideoCapture;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import nu.pattern.OpenCV;
 
 public class OpencvExample {
 
-    public static final String SAVE_PATH = "src/main/resources";
+    public static final String SAVE_DIR = "src/main/resources";
+    public static final String FILE_NAME = "snapshot";
+    public static final String FILE_EXT = "png";
+    public static final String SAVE_PATH = SAVE_DIR + "/" + FILE_NAME + "." + FILE_EXT;
     public static final String OCR_KEY = "RGVQck1qYm1IZ29GZHJQWmpIdERNZlFqdFl6dHdrYXM=";
     public static final String REST_URI = "https://569cdd509a4c4e31bf80651af98c4b45.apigw.ntruss.com/custom/v1/2871/015a8ef25eb2f464f0bc251746946304749b818b0dda137b9041e56e4a965dbd/general";
 
     public static void main(String[] args) throws IOException {
-        // load the native opencv library
+        // load opencv library
         OpenCV.loadShared();
         System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
 
-//        Mat mat = Mat.eye(3, 3, CvType.CV_8UC1);
-//        System.out.println("mat = " + mat.dump());
+        // Instantiating the VideoCapture class (camera:: 0)
+        VideoCapture capture = new VideoCapture();
+        capture.open(0);
+        // Check if video capturing is enabled
+        if (!capture.isOpened()) {
+            System.out.println("camera is not enabled!");
+            System.exit(-1);
+        }
+        // Reading the next video frame from the camera
+        Mat mat = new Mat();
+        capture.read(mat);
+        saveImage(mat, SAVE_PATH);
 
-        File imageFile = new File(SAVE_PATH + "/gongcha_menu.png");
+        File imageFile = new File(SAVE_PATH);
         String imagePath = imageFile.getAbsolutePath();
 
         // read and convert image file to base64 string
@@ -48,7 +70,7 @@ public class OpencvExample {
         System.out.println("Encoded String = " + encodedString);
 
         // prepare for Naver OCR API call
-        OcrReqImage ocrReqImg = new OcrReqImage("png", "HelloWorld");
+        OcrReqImage ocrReqImg = new OcrReqImage("png", "CapturedImage");
         ocrReqImg.setData(encodedString);
         ArrayList<OcrReqImage> images = new ArrayList<>();
         images.add(ocrReqImg);
@@ -62,6 +84,8 @@ public class OpencvExample {
         System.out.println("Extracted OCR Text = " + ocrText);
         // extract OCR fields
         ArrayList<OcrResField> ocrResFields = extractOcrFields(ocrApiCallResult, OcrResponse.class);
+        // draw bounding box
+        drawBoundingBox(SAVE_PATH, ocrResFields, new Scalar(255, 0, 0));
 
         // finger detection with hsv
         // convert source image to HSV
@@ -76,7 +100,7 @@ public class OpencvExample {
         Mat maskedImage = new Mat();
         Core.inRange(hsvImage, scalarLower, scalarUpper, maskedImage);
         // save masked image
-        saveImage(maskedImage, SAVE_PATH + "/gongcha_menu_detected.png");
+        saveImage(maskedImage, SAVE_DIR + "/" + FILE_NAME + "_detected.png");
 
         // morphological operators
         // dilate with large element, erode with small ones
@@ -98,13 +122,17 @@ public class OpencvExample {
         int bottomY = srcImage.height();
         Point pt = new Point(centerX, bottomY - 1);
         MatOfPoint fingerCont = findFingerContour(contours, pt);
+        if (fingerCont.empty()) {
+            System.out.println("finger contour not found!");
+            System.exit(-1);
+        }
 
         // draw contours
         Mat contourImage = srcImage.clone();
         List<MatOfPoint> contList = new ArrayList<>();
         contList.add(fingerCont);
         Imgproc.drawContours(contourImage, contList, -1, new Scalar(0, 255, 0), 2);
-        saveImage(contourImage, SAVE_PATH + "/gongcha_menu_contour.png");
+        saveImage(contourImage, SAVE_DIR + "/" + FILE_NAME + "_contour.png");
 
 //        // get convex hull
 //        List<MatOfPoint> convexHull = getConvexHull(contours);
@@ -136,6 +164,20 @@ public class OpencvExample {
             }
         }
         System.out.println("The text the finger is pointing to is: " + closestText);
+    }
+
+    // draw bounding box and save image
+    private static void drawBoundingBox(String imgPath, ArrayList<OcrResField> ocrResFields, Scalar scalar) {
+        Mat boundingBoxImg = Imgcodecs.imread(imgPath).clone();
+        for(OcrResField field: ocrResFields) {
+            Vertex v1 = field.getBoundingPoly().getVertices().get(0);
+            Vertex v2 = field.getBoundingPoly().getVertices().get(2);
+            Point pt1 = new Point(v1.getX(), v1.getY());
+            Point pt2 = new Point(v2.getX(), v2.getY());
+            Imgproc.rectangle(boundingBoxImg, pt1, pt2, scalar);
+        }
+        saveImage(boundingBoxImg, SAVE_DIR + "/" + FILE_NAME + "_bounding_box.png");
+        System.out.println("The bounding box has drawn at: "+ FILE_NAME + "_bounding_box.png");
     }
 
     // get distance between fingertip and center point of the ocr text
@@ -206,13 +248,11 @@ public class OpencvExample {
 
     // load image
     private static Mat loadImage(String imagePath) {
-        Imgcodecs imageCodecs = new Imgcodecs();
-        return imageCodecs.imread(imagePath);
+        return Imgcodecs.imread(imagePath);
     }
     // save image
     private static void saveImage(Mat imageMatrix, String targetPath) {
-        Imgcodecs imgcodecs = new Imgcodecs();
-        imgcodecs.imwrite(targetPath, imageMatrix);
+        Imgcodecs.imwrite(targetPath, imageMatrix);
     }
 
     /**
@@ -228,8 +268,8 @@ public class OpencvExample {
             MatOfPoint2f con2 = new MatOfPoint2f();
             cont.convertTo(con2, CV_32FC2);
             double pointInContour = Imgproc.pointPolygonTest(con2, pt, false);
-            System.out.println("src image point(center,bottom-1): (" + pt.x + "," + pt.y + ")");
-            System.out.println("point is inside or on edge?: " + (pointInContour > -1.0 ? "Yes" : "No"));
+//            System.out.println("src image point(center,bottom-1): (" + pt.x + "," + pt.y + ")");
+//            System.out.println("point is inside or on edge?: " + (pointInContour > -1.0 ? "Yes" : "No"));
             if (pointInContour > -1) {
                 System.out.println("pointInCountour index: " + i);
                 fingerCont = cont;
