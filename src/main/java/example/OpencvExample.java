@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Scanner;
 
 import javax.ws.rs.client.Client;
 import javax.ws.rs.client.ClientBuilder;
@@ -34,7 +35,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import nu.pattern.OpenCV;
 
-public class OpencvExample {
+public class OpencvExample implements Runnable {
+
+    private static Boolean isRunning = true;
+    private static Boolean isUpdated = false;
+    private static Mat imgBuffer = null;
 
     public static final String SAVE_DIR = "src/main/resources";
     public static final String FILE_NAME = "snapshot";
@@ -43,127 +48,181 @@ public class OpencvExample {
     public static final String OCR_KEY = "RGVQck1qYm1IZ29GZHJQWmpIdERNZlFqdFl6dHdrYXM=";
     public static final String REST_URI = "https://569cdd509a4c4e31bf80651af98c4b45.apigw.ntruss.com/custom/v1/2871/015a8ef25eb2f464f0bc251746946304749b818b0dda137b9041e56e4a965dbd/general";
 
+    public static class UpdateLatestImage implements Runnable {
+        @Override
+        public void run() {
+            while (isRunning) {
+                System.out.println("ThreadName: "+Thread.currentThread().getName() + ", param.isUpdated: "+isUpdated);
+                try {
+                    System.out.println("======= image capture start ========");
+                    System.out.println("// load opencv library");
+                    System.out.println("// Instantiating the VideoCapture class (camera:: 0)");
+                    System.out.println("// Reading the next video frame from the camera");
+                    Thread.sleep(2000);
+                    isUpdated = true;
+                    System.out.println("======= image capture end ========");
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("// image captured");
+            }
+        }
+    }
+
+    @Override
+    public void run() {
+        while (isRunning) {
+            System.out.println("ThreadName: " + Thread.currentThread().getName() + ", param.isUpdated: "+isUpdated);
+            try {
+                System.out.println("// check new image");
+                if (!isUpdated) {
+                    Thread.sleep(1000);
+                    continue;
+                }
+                System.out.println("// call Naver OCR API");
+                isUpdated = false;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
     public static void main(String[] args) throws IOException {
-        // load opencv library
-        OpenCV.loadShared();
-        System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
+        UpdateLatestImage updateLatestImage = new UpdateLatestImage();
+        Thread threadUpdateLatestImage = new Thread(updateLatestImage, "update latest image thread");
+        OpencvExample opencvExample = new OpencvExample();
+        Thread threadMain = new Thread(opencvExample, "main thread");
+        threadUpdateLatestImage.start();
+        threadMain.start();
 
-        // Instantiating the VideoCapture class (camera:: 0)
-        VideoCapture capture = new VideoCapture();
-        capture.open(0);
-        // Check if video capturing is enabled
-        if (!capture.isOpened()) {
-            System.out.println("camera is not enabled!");
-            System.exit(-1);
-        }
-        // Reading the next video frame from the camera
-        Mat mat = new Mat();
-        capture.read(mat);
-        saveImage(mat, SAVE_PATH);
-
-        File imageFile = new File(SAVE_PATH);
-        String imagePath = imageFile.getAbsolutePath();
-
-        // read and convert image file to base64 string
-        byte[] fileContent = FileUtils.readFileToByteArray(imageFile);
-        String encodedString = Base64.getEncoder().encodeToString(fileContent);
-        System.out.println("Encoded String = " + encodedString);
-
-        // prepare for Naver OCR API call
-        OcrReqImage ocrReqImg = new OcrReqImage("png", "CapturedImage");
-        ocrReqImg.setData(encodedString);
-        ArrayList<OcrReqImage> images = new ArrayList<>();
-        images.add(ocrReqImg);
-        OcrRequest ocrReq = new OcrRequest("V2", "string", 0, "ko");
-        ocrReq.setImages(images);
-        // call Naver OCR API
-        String ocrApiCallResult = callOcrApi(REST_URI, ocrReq, OCR_KEY);
-        System.out.println("OCR API Call Result = " + ocrApiCallResult);
-        // extract OCR text
-        String ocrText = extractOcrText(ocrApiCallResult, OcrResponse.class);
-        System.out.println("Extracted OCR Text = " + ocrText);
-        // extract OCR fields
-        ArrayList<OcrResField> ocrResFields = extractOcrFields(ocrApiCallResult, OcrResponse.class);
-        // draw bounding box
-        drawBoundingBox(SAVE_PATH, ocrResFields, new Scalar(255, 0, 0));
-
-        // finger detection with hsv
-        // convert source image to HSV
-        Mat srcImage = loadImage(imagePath);
-        Mat blurImage = new Mat();
-        Mat hsvImage = new Mat();
-        Imgproc.blur(srcImage, blurImage, new Size(7, 7));  // remove some noise
-        Imgproc.cvtColor(blurImage, hsvImage, Imgproc.COLOR_BGR2HSV);
-        // mask hsv image
-        Scalar scalarLower = new Scalar(0, 30, 0);
-        Scalar scalarUpper = new Scalar(15, 255, 255);
-        Mat maskedImage = new Mat();
-        Core.inRange(hsvImage, scalarLower, scalarUpper, maskedImage);
-        // save masked image
-        saveImage(maskedImage, SAVE_DIR + "/" + FILE_NAME + "_detected.png");
-
-        // morphological operators
-        // dilate with large element, erode with small ones
-        Mat morphImage = new Mat();
-        Mat dilateElement = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(12, 12));
-        Mat erodeElement = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(12, 12));
-        Imgproc.erode(maskedImage, morphImage, erodeElement);
-        Imgproc.erode(maskedImage, morphImage, erodeElement);
-        Imgproc.dilate(maskedImage, morphImage, dilateElement);
-        Imgproc.dilate(maskedImage, morphImage, dilateElement);
-
-        // find contours
-        List<MatOfPoint> contours = new ArrayList<>();
-        Mat hierarchy = new Mat();
-        Imgproc.findContours(morphImage, contours, hierarchy, Imgproc.RETR_CCOMP, Imgproc.CHAIN_APPROX_SIMPLE);
-
-        // find the finger contour
-        int centerX = srcImage.width() / 2;
-        int bottomY = srcImage.height();
-        Point pt = new Point(centerX, bottomY - 1);
-        MatOfPoint fingerCont = findFingerContour(contours, pt);
-        if (fingerCont.empty()) {
-            System.out.println("finger contour not found!");
-            System.exit(-1);
+        Scanner userInput = new Scanner(System.in);
+        String inputString = userInput.nextLine();
+//        System.out.println(inputString);
+        while (inputString.equals("c")) {
+            isRunning = false;
+            System.exit(0);
         }
 
-        // draw contours
-        Mat contourImage = srcImage.clone();
-        List<MatOfPoint> contList = new ArrayList<>();
-        contList.add(fingerCont);
-        Imgproc.drawContours(contourImage, contList, -1, new Scalar(0, 255, 0), 2);
-        saveImage(contourImage, SAVE_DIR + "/" + FILE_NAME + "_contour.png");
-
-//        // get convex hull
-//        List<MatOfPoint> convexHull = getConvexHull(contours);
-//        // draw convex hull
-//        Mat convexImage = contourImage.clone();
-//        Imgproc.drawContours(convexImage, convexHull, -1, new Scalar(0, 0, 255), 2);
-//        saveImage(convexImage, savePath + "/gongcha_menu_convex_hull.png");
-
-        // find a point of the fingertip
-        Point fingertip = findFingertip(fingerCont);
-        // find the text closest to fingertip
-        double minDist = 0;
-        String closestText = "";
-        for (int i=0; i<ocrResFields.size(); i++) {
-            OcrResField field = ocrResFields.get(i);
-            // find a center of the rectangle from the ocr text
-            ArrayList<Vertex> vertices = field.getBoundingPoly().getVertices();
-            Point centerOfText = findCenterOfRect(vertices);
-
-            // get distance between two points
-            double distance = getDistance(fingertip, centerOfText);
-            if (i == 0) {
-                minDist = distance;
-                closestText = field.getInferText();
-            }
-            if (distance < minDist) {
-                minDist = distance;
-                closestText = field.getInferText();
-            }
-        }
-        System.out.println("The text the finger is pointing to is: " + closestText);
+//        // load opencv library
+//        OpenCV.loadShared();
+//        System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
+//
+//        // Instantiating the VideoCapture class (camera:: 0)
+//        VideoCapture capture = new VideoCapture();
+//        capture.open(0);
+//        // Check if video capturing is enabled
+//        if (!capture.isOpened()) {
+//            System.out.println("camera is not enabled!");
+//            System.exit(-1);
+//        }
+//        // Reading the next video frame from the camera
+//        Mat mat = new Mat();
+//        capture.read(mat);
+//        saveImage(mat, SAVE_PATH);
+//
+//        File imageFile = new File(SAVE_PATH);
+//        String imagePath = imageFile.getAbsolutePath();
+//
+//        // read and convert image file to base64 string
+//        byte[] fileContent = FileUtils.readFileToByteArray(imageFile);
+//        String encodedString = Base64.getEncoder().encodeToString(fileContent);
+//        System.out.println("Encoded String = " + encodedString);
+//
+//        // prepare for Naver OCR API call
+//        OcrReqImage ocrReqImg = new OcrReqImage("png", "CapturedImage");
+//        ocrReqImg.setData(encodedString);
+//        ArrayList<OcrReqImage> images = new ArrayList<>();
+//        images.add(ocrReqImg);
+//        OcrRequest ocrReq = new OcrRequest("V2", "string", 0, "ko");
+//        ocrReq.setImages(images);
+//        // call Naver OCR API
+//        String ocrApiCallResult = callOcrApi(REST_URI, ocrReq, OCR_KEY);
+//        System.out.println("OCR API Call Result = " + ocrApiCallResult);
+//        // extract OCR text
+//        String ocrText = extractOcrText(ocrApiCallResult, OcrResponse.class);
+//        System.out.println("Extracted OCR Text = " + ocrText);
+//        // extract OCR fields
+//        ArrayList<OcrResField> ocrResFields = extractOcrFields(ocrApiCallResult, OcrResponse.class);
+//        // draw bounding box
+//        drawBoundingBox(SAVE_PATH, ocrResFields, new Scalar(255, 0, 0));
+//
+//        // finger detection with hsv
+//        // convert source image to HSV
+//        Mat srcImage = loadImage(imagePath);
+//        Mat blurImage = new Mat();
+//        Mat hsvImage = new Mat();
+//        Imgproc.blur(srcImage, blurImage, new Size(7, 7));  // remove some noise
+//        Imgproc.cvtColor(blurImage, hsvImage, Imgproc.COLOR_BGR2HSV);
+//        // mask hsv image
+//        Scalar scalarLower = new Scalar(0, 30, 0);
+//        Scalar scalarUpper = new Scalar(15, 255, 255);
+//        Mat maskedImage = new Mat();
+//        Core.inRange(hsvImage, scalarLower, scalarUpper, maskedImage);
+//        // save masked image
+//        saveImage(maskedImage, SAVE_DIR + "/" + FILE_NAME + "_detected.png");
+//
+//        // morphological operators
+//        // dilate with large element, erode with small ones
+//        Mat morphImage = new Mat();
+//        Mat dilateElement = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(12, 12));
+//        Mat erodeElement = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(12, 12));
+//        Imgproc.erode(maskedImage, morphImage, erodeElement);
+//        Imgproc.erode(maskedImage, morphImage, erodeElement);
+//        Imgproc.dilate(maskedImage, morphImage, dilateElement);
+//        Imgproc.dilate(maskedImage, morphImage, dilateElement);
+//
+//        // find contours
+//        List<MatOfPoint> contours = new ArrayList<>();
+//        Mat hierarchy = new Mat();
+//        Imgproc.findContours(morphImage, contours, hierarchy, Imgproc.RETR_CCOMP, Imgproc.CHAIN_APPROX_SIMPLE);
+//
+//        // find the finger contour
+//        int centerX = srcImage.width() / 2;
+//        int bottomY = srcImage.height();
+//        Point pt = new Point(centerX, bottomY - 1);
+//        MatOfPoint fingerCont = findFingerContour(contours, pt);
+//        if (fingerCont.empty()) {
+//            System.out.println("finger contour not found!");
+//            System.exit(-1);
+//        }
+//
+//        // draw contours
+//        Mat contourImage = srcImage.clone();
+//        List<MatOfPoint> contList = new ArrayList<>();
+//        contList.add(fingerCont);
+//        Imgproc.drawContours(contourImage, contList, -1, new Scalar(0, 255, 0), 2);
+//        saveImage(contourImage, SAVE_DIR + "/" + FILE_NAME + "_contour.png");
+//
+////        // get convex hull
+////        List<MatOfPoint> convexHull = getConvexHull(contours);
+////        // draw convex hull
+////        Mat convexImage = contourImage.clone();
+////        Imgproc.drawContours(convexImage, convexHull, -1, new Scalar(0, 0, 255), 2);
+////        saveImage(convexImage, savePath + "/gongcha_menu_convex_hull.png");
+//
+//        // find a point of the fingertip
+//        Point fingertip = findFingertip(fingerCont);
+//        // find the text closest to fingertip
+//        double minDist = 0;
+//        String closestText = "";
+//        for (int i=0; i<ocrResFields.size(); i++) {
+//            OcrResField field = ocrResFields.get(i);
+//            // find a center of the rectangle from the ocr text
+//            ArrayList<Vertex> vertices = field.getBoundingPoly().getVertices();
+//            Point centerOfText = findCenterOfRect(vertices);
+//
+//            // get distance between two points
+//            double distance = getDistance(fingertip, centerOfText);
+//            if (i == 0) {
+//                minDist = distance;
+//                closestText = field.getInferText();
+//            }
+//            if (distance < minDist) {
+//                minDist = distance;
+//                closestText = field.getInferText();
+//            }
+//        }
+//        System.out.println("The text the finger is pointing to is: " + closestText);
     }
 
     // draw bounding box and save image
