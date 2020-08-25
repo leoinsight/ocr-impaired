@@ -47,7 +47,7 @@ public class OpencvOcrExample implements Runnable {
 				// 새로운 이미지가 쓰레드에서 갱신되었는지 check
 				System.out.println("// check new image");
 				if (!status.getUpdated()) {
-					Thread.sleep(1500);	// 1s 대기 --> 새로운 이미지가 들어올때까지 sleep
+					Thread.sleep(5000);	// 5s 대기 --> 새로운 이미지가 들어올때까지 sleep
 					continue;
 				}
 
