@@ -17,8 +17,9 @@ Project Install
     - ocr-impaired-master.zip
 
 2. Open Eclipse and import projects...
-    - Select Existing Projects into workspace
+    - Select Projects from Folder or Archive
     - Select archive file (ocr-impaired-master.zip)
+    - Uncheck ocr-impared-master.zip_expanded (Check ocr-impared-master.zip_expanded\ocr-impared-master)
 
 3. Maven > Update project (Alt+F5)
     - 프로젝트 마우스 우클릭 > Maven > Update Project...
